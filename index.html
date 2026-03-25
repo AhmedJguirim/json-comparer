@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>JSON Comparer</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: system-ui, sans-serif; background: #1e1e2e; color: #cdd6f4; height: 100vh; display: flex; flex-direction: column; }
+  header { padding: 10px 20px; display: flex; gap: 12px; align-items: center; background: #181825; border-bottom: 1px solid #313244; }
+  header button { padding: 6px 16px; border: 1px solid #45475a; background: #313244; color: #cdd6f4; border-radius: 4px; cursor: pointer; font-size: 13px; }
+  header button:hover { background: #45475a; }
+  .status { padding: 0 12px; font-size: 13px; color: #6c7086; }
+  .container { display: flex; flex: 1; overflow: hidden; }
+  .pane { flex: 1; display: flex; flex-direction: column; }
+  .pane + .pane { border-left: 1px solid #313244; }
+  .pane-header { padding: 6px 12px; background: #181825; font-size: 12px; font-weight: 600; border-bottom: 1px solid #313244; }
+  textarea { flex: 1; background: #1e1e2e; color: #cdd6f4; border: none; padding: 12px; font-family: Consolas, monospace; font-size: 13px; resize: none; outline: none; }
+  .diff-view { flex: 1; overflow: auto; font-family: Consolas, monospace; font-size: 13px; line-height: 1.6; }
+  .line { padding: 0 12px; white-space: pre; min-height: 1.6em; }
+  .line.added { background: rgba(166,227,161,0.12); color: #a6e3a1; }
+  .line.removed { background: rgba(243,139,168,0.12); color: #f38ba8; }
+  .line.changed { background: rgba(250,179,135,0.12); color: #fab387; }
+  .linenum { display: inline-block; width: 36px; text-align: right; margin-right: 10px; opacity: 0.3; user-select: none; }
+</style>
+</head>
+<body>
+<header>
+  <button id="btn-compare">Compare</button>
+  <button id="btn-clear">Clear</button>
+  <span class="status" id="status"></span>
+</header>
+<div class="container" id="main">
+  <div class="pane">
+    <div class="pane-header">Left</div>
+    <textarea id="left" placeholder="Paste JSON here..." spellcheck="false"></textarea>
+  </div>
+  <div class="pane">
+    <div class="pane-header">Right</div>
+    <textarea id="right" placeholder="Paste JSON here..." spellcheck="false"></textarea>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+$('btn-compare').addEventListener('click', compare);
+$('btn-clear').addEventListener('click', () => {
+  const container = $('main');
+  container.innerHTML = `
+    <div class="pane"><div class="pane-header">Left</div><textarea id="left" placeholder="Paste JSON here..." spellcheck="false"></textarea></div>
+    <div class="pane"><div class="pane-header">Right</div><textarea id="right" placeholder="Paste JSON here..." spellcheck="false"></textarea></div>`;
+  $('status').textContent = '';
+});
+
+function compare() {
+  let a, b;
+  try { a = JSON.parse($('left').value); } catch { return $('status').textContent = 'Left side is not valid JSON.'; }
+  try { b = JSON.parse($('right').value); } catch { return $('status').textContent = 'Right side is not valid JSON.'; }
+
+  const diffs = [];
+  diff(a, b, '', diffs);
+
+  const leftLines = [], rightLines = [];
+  diffs.forEach(d => {
+    if (d.type === 'equal') {
+      leftLines.push({ cls: '', text: d.path + ': ' + fmt(d.left) });
+      rightLines.push({ cls: '', text: d.path + ': ' + fmt(d.right) });
+    } else if (d.type === 'changed') {
+      leftLines.push({ cls: 'changed', text: d.path + ': ' + fmt(d.left) });
+      rightLines.push({ cls: 'changed', text: d.path + ': ' + fmt(d.right) });
+    } else if (d.type === 'removed') {
+      leftLines.push({ cls: 'removed', text: d.path + ': ' + fmt(d.left) });
+      rightLines.push({ cls: '', text: '' });
+    } else {
+      leftLines.push({ cls: '', text: '' });
+      rightLines.push({ cls: 'added', text: d.path + ': ' + fmt(d.right) });
+    }
+  });
+
+  const container = $('main');
+  container.innerHTML = `
+    <div class="pane"><div class="pane-header">Left</div><div class="diff-view" id="dv-left"></div></div>
+    <div class="pane"><div class="pane-header">Right</div><div class="diff-view" id="dv-right"></div></div>`;
+
+  renderLines($('dv-left'), leftLines);
+  renderLines($('dv-right'), rightLines);
+
+  // sync scroll
+  const lv = $('dv-left'), rv = $('dv-right');
+  let s = false;
+  lv.addEventListener('scroll', () => { if (!s) { s = true; rv.scrollTop = lv.scrollTop; s = false; } });
+  rv.addEventListener('scroll', () => { if (!s) { s = true; lv.scrollTop = rv.scrollTop; s = false; } });
+
+  const changes = diffs.filter(d => d.type !== 'equal').length;
+  $('status').textContent = changes === 0 ? 'Identical.' : changes + ' difference' + (changes > 1 ? 's' : '') + '.';
+}
+
+function diff(a, b, path, out) {
+  const keys = new Set([...Object.keys(a || {}), ...Object.keys(b || {})]);
+  for (const k of [...keys].sort()) {
+    const p = path ? path + '.' + k : k;
+    const inA = a != null && k in a, inB = b != null && k in b;
+    if (inA && inB) {
+      if (typeof a[k] === 'object' && a[k] !== null && typeof b[k] === 'object' && b[k] !== null && !Array.isArray(a[k]) && !Array.isArray(b[k])) {
+        diff(a[k], b[k], p, out);
+      } else {
+        const av = JSON.stringify(a[k]), bv = JSON.stringify(b[k]);
+        out.push({ type: av === bv ? 'equal' : 'changed', path: p, left: a[k], right: b[k] });
+      }
+    } else if (inA) {
+      flatten(a[k], p, 'removed', out);
+    } else {
+      flatten(b[k], p, 'added', out);
+    }
+  }
+}
+
+function flatten(val, path, type, out) {
+  if (typeof val === 'object' && val !== null && !Array.isArray(val)) {
+    for (const k of Object.keys(val).sort()) flatten(val[k], path + '.' + k, type, out);
+  } else {
+    const e = { type, path };
+    if (type === 'removed') e.left = val; else e.right = val;
+    out.push(e);
+  }
+}
+
+function fmt(v) { return v === undefined ? '' : JSON.stringify(v); }
+
+function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+function renderLines(el, lines) {
+  el.innerHTML = lines.map((l, i) =>
+    `<div class="line ${l.cls}"><span class="linenum">${i + 1}</span>${esc(l.text)}</div>`
+  ).join('');
+}
+</script>
+</body>
+</html>

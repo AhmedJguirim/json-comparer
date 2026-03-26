@@ -6,10 +6,12 @@
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: system-ui, sans-serif; background: #1e1e2e; color: #cdd6f4; height: 100vh; display: flex; flex-direction: column; }
-  header { padding: 10px 20px; display: flex; gap: 12px; align-items: center; background: #181825; border-bottom: 1px solid #313244; }
+  header { padding: 10px 20px; display: flex; gap: 12px; align-items: center; background: #181825; border-bottom: 1px solid #313244; flex-wrap: wrap; }
   header button { padding: 6px 16px; border: 1px solid #45475a; background: #313244; color: #cdd6f4; border-radius: 4px; cursor: pointer; font-size: 13px; }
   header button:hover { background: #45475a; }
+  header button.active { background: #45475a; border-color: #89b4fa; color: #89b4fa; }
   .status { padding: 0 12px; font-size: 13px; color: #6c7086; }
+  .sep { width: 1px; height: 20px; background: #313244; }
   .container { display: flex; flex: 1; overflow: hidden; }
   .pane { flex: 1; display: flex; flex-direction: column; }
   .pane + .pane { border-left: 1px solid #313244; }
@@ -20,6 +22,7 @@
   .line.added { background: rgba(166,227,161,0.12); color: #a6e3a1; }
   .line.removed { background: rgba(243,139,168,0.12); color: #f38ba8; }
   .line.changed { background: rgba(250,179,135,0.12); color: #fab387; }
+  .line.separator { color: #45475a; border-top: 1px dashed #313244; margin-top: 2px; }
   .linenum { display: inline-block; width: 36px; text-align: right; margin-right: 10px; opacity: 0.3; user-select: none; }
 </style>
 </head>
@@ -27,6 +30,8 @@
 <header>
   <button id="btn-compare">Compare</button>
   <button id="btn-clear">Clear</button>
+  <div class="sep"></div>
+  <button id="btn-diffsonly">Diffs only</button>
   <span class="status" id="status"></span>
 </header>
 <div class="container" id="main">
@@ -43,8 +48,19 @@
 <script>
 const $ = id => document.getElementById(id);
 
+let lastDiffs = null;
+let diffsOnly = false;
+
 $('btn-compare').addEventListener('click', compare);
+
+$('btn-diffsonly').addEventListener('click', () => {
+  diffsOnly = !diffsOnly;
+  $('btn-diffsonly').classList.toggle('active', diffsOnly);
+  if (lastDiffs) renderDiffs(lastDiffs);
+});
+
 $('btn-clear').addEventListener('click', () => {
+  lastDiffs = null;
   const container = $('main');
   container.innerHTML = `
     <div class="pane"><div class="pane-header">Left</div><textarea id="left" placeholder="Paste JSON here..." spellcheck="false"></textarea></div>
@@ -58,24 +74,52 @@ function compare() {
   try { b = JSON.parse($('right').value); } catch { return $('status').textContent = 'Right side is not valid JSON.'; }
 
   const diffs = [];
-  diff(a, b, '', diffs);
+  diffVal(a, b, '', diffs);
+  lastDiffs = diffs;
+  renderDiffs(diffs);
+}
 
+function renderDiffs(diffs) {
+  const changes = diffs.filter(d => d.type !== 'equal').length;
+  $('status').textContent = changes === 0 ? 'Identical.' : changes + ' difference' + (changes > 1 ? 's' : '') + '.';
+
+  // Group consecutive equal lines and collapse them when diffsOnly is on
   const leftLines = [], rightLines = [];
+  let equalBuf = [];
+
+  function flushEquals() {
+    if (!equalBuf.length) return;
+    if (diffsOnly) {
+      const label = `··· ${equalBuf.length} identical line${equalBuf.length > 1 ? 's' : ''} ···`;
+      leftLines.push({ cls: 'separator', text: label });
+      rightLines.push({ cls: 'separator', text: label });
+    } else {
+      equalBuf.forEach(d => {
+        leftLines.push({ cls: '', text: d.path + ': ' + fmt(d.left) });
+        rightLines.push({ cls: '', text: d.path + ': ' + fmt(d.right) });
+      });
+    }
+    equalBuf = [];
+  }
+
   diffs.forEach(d => {
     if (d.type === 'equal') {
-      leftLines.push({ cls: '', text: d.path + ': ' + fmt(d.left) });
-      rightLines.push({ cls: '', text: d.path + ': ' + fmt(d.right) });
-    } else if (d.type === 'changed') {
-      leftLines.push({ cls: 'changed', text: d.path + ': ' + fmt(d.left) });
-      rightLines.push({ cls: 'changed', text: d.path + ': ' + fmt(d.right) });
-    } else if (d.type === 'removed') {
-      leftLines.push({ cls: 'removed', text: d.path + ': ' + fmt(d.left) });
-      rightLines.push({ cls: '', text: '' });
+      equalBuf.push(d);
     } else {
-      leftLines.push({ cls: '', text: '' });
-      rightLines.push({ cls: 'added', text: d.path + ': ' + fmt(d.right) });
+      flushEquals();
+      if (d.type === 'changed') {
+        leftLines.push({ cls: 'changed', text: d.path + ': ' + fmt(d.left) });
+        rightLines.push({ cls: 'changed', text: d.path + ': ' + fmt(d.right) });
+      } else if (d.type === 'removed') {
+        leftLines.push({ cls: 'removed', text: d.path + ': ' + fmt(d.left) });
+        rightLines.push({ cls: '', text: '' });
+      } else {
+        leftLines.push({ cls: '', text: '' });
+        rightLines.push({ cls: 'added', text: d.path + ': ' + fmt(d.right) });
+      }
     }
   });
+  flushEquals();
 
   const container = $('main');
   container.innerHTML = `
@@ -90,23 +134,41 @@ function compare() {
   let s = false;
   lv.addEventListener('scroll', () => { if (!s) { s = true; rv.scrollTop = lv.scrollTop; s = false; } });
   rv.addEventListener('scroll', () => { if (!s) { s = true; lv.scrollTop = rv.scrollTop; s = false; } });
-
-  const changes = diffs.filter(d => d.type !== 'equal').length;
-  $('status').textContent = changes === 0 ? 'Identical.' : changes + ' difference' + (changes > 1 ? 's' : '') + '.';
 }
 
-function diff(a, b, path, out) {
-  const keys = new Set([...Object.keys(a || {}), ...Object.keys(b || {})]);
+// Decide the key to use when matching array elements
+function matchKey(arr) {
+  const candidates = ['@id', 'id', 'uuid', 'key', 'name', 'code'];
+  if (!arr.length || typeof arr[0] !== 'object' || arr[0] === null) return null;
+  for (const k of candidates) {
+    if (arr[0][k] !== undefined) return k;
+  }
+  return null;
+}
+
+function diffVal(a, b, path, out) {
+  const aIsObj = typeof a === 'object' && a !== null && !Array.isArray(a);
+  const bIsObj = typeof b === 'object' && b !== null && !Array.isArray(b);
+  const aIsArr = Array.isArray(a);
+  const bIsArr = Array.isArray(b);
+
+  if (aIsObj && bIsObj) {
+    diffObj(a, b, path, out);
+  } else if (aIsArr && bIsArr) {
+    diffArr(a, b, path, out);
+  } else {
+    const av = JSON.stringify(a), bv = JSON.stringify(b);
+    out.push({ type: av === bv ? 'equal' : 'changed', path, left: a, right: b });
+  }
+}
+
+function diffObj(a, b, path, out) {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
   for (const k of [...keys].sort()) {
     const p = path ? path + '.' + k : k;
-    const inA = a != null && k in a, inB = b != null && k in b;
+    const inA = k in a, inB = k in b;
     if (inA && inB) {
-      if (typeof a[k] === 'object' && a[k] !== null && typeof b[k] === 'object' && b[k] !== null && !Array.isArray(a[k]) && !Array.isArray(b[k])) {
-        diff(a[k], b[k], p, out);
-      } else {
-        const av = JSON.stringify(a[k]), bv = JSON.stringify(b[k]);
-        out.push({ type: av === bv ? 'equal' : 'changed', path: p, left: a[k], right: b[k] });
-      }
+      diffVal(a[k], b[k], p, out);
     } else if (inA) {
       flatten(a[k], p, 'removed', out);
     } else {
@@ -115,9 +177,52 @@ function diff(a, b, path, out) {
   }
 }
 
+function diffArr(a, b, path, out) {
+  const key = matchKey(a.length ? a : b);
+
+  if (key) {
+    // Match by identity key (e.g. id, @id)
+    const aMap = new Map(), bMap = new Map();
+    a.forEach(el => { if (el && el[key] != null) aMap.set(String(el[key]), el); });
+    b.forEach(el => { if (el && el[key] != null) bMap.set(String(el[key]), el); });
+
+    const allKeys = [...new Set([...aMap.keys(), ...bMap.keys()])].sort();
+    for (const id of allKeys) {
+      const p = path + `[${key}=${id}]`;
+      const inA = aMap.has(id), inB = bMap.has(id);
+      if (inA && inB) {
+        diffVal(aMap.get(id), bMap.get(id), p, out);
+      } else if (inA) {
+        flatten(aMap.get(id), p, 'removed', out);
+      } else {
+        flatten(bMap.get(id), p, 'added', out);
+      }
+    }
+  } else {
+    // Fall back to index-based comparison
+    const len = Math.max(a.length, b.length);
+    for (let i = 0; i < len; i++) {
+      const p = path + `[${i}]`;
+      if (i < a.length && i < b.length) {
+        diffVal(a[i], b[i], p, out);
+      } else if (i < a.length) {
+        flatten(a[i], p, 'removed', out);
+      } else {
+        flatten(b[i], p, 'added', out);
+      }
+    }
+  }
+}
+
 function flatten(val, path, type, out) {
   if (typeof val === 'object' && val !== null && !Array.isArray(val)) {
     for (const k of Object.keys(val).sort()) flatten(val[k], path + '.' + k, type, out);
+  } else if (Array.isArray(val)) {
+    const key = matchKey(val);
+    val.forEach((el, i) => {
+      const p = key && el && el[key] != null ? path + `[${key}=${el[key]}]` : path + `[${i}]`;
+      flatten(el, p, type, out);
+    });
   } else {
     const e = { type, path };
     if (type === 'removed') e.left = val; else e.right = val;
@@ -131,7 +236,7 @@ function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(
 
 function renderLines(el, lines) {
   el.innerHTML = lines.map((l, i) =>
-    `<div class="line ${l.cls}"><span class="linenum">${i + 1}</span>${esc(l.text)}</div>`
+    `<div class="line ${l.cls}"><span class="linenum">${l.cls === 'separator' ? '' : i + 1}</span>${esc(l.text)}</div>`
   ).join('');
 }
 </script>

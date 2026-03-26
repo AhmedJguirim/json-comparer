@@ -30,6 +30,7 @@
 <header>
   <button id="btn-compare">Compare</button>
   <button id="btn-clear">Clear</button>
+  <button id="btn-clear-right">Clear Right</button>
   <div class="sep"></div>
   <button id="btn-diffsonly">Diffs only</button>
   <span class="status" id="status"></span>
@@ -49,6 +50,7 @@
 const $ = id => document.getElementById(id);
 
 let lastDiffs = null;
+let lastLeft = '';
 let diffsOnly = false;
 
 $('btn-compare').addEventListener('click', compare);
@@ -68,9 +70,20 @@ $('btn-clear').addEventListener('click', () => {
   $('status').textContent = '';
 });
 
+$('btn-clear-right').addEventListener('click', () => {
+  lastDiffs = null;
+  const container = $('main');
+  container.innerHTML = `
+    <div class="pane"><div class="pane-header">Left</div><textarea id="left" placeholder="Paste JSON here..." spellcheck="false"></textarea></div>
+    <div class="pane"><div class="pane-header">Right</div><textarea id="right" placeholder="Paste JSON here..." spellcheck="false"></textarea></div>`;
+  $('left').value = lastLeft;
+  $('status').textContent = '';
+});
+
 function compare() {
   let a, b;
-  try { a = JSON.parse($('left').value); } catch { return $('status').textContent = 'Left side is not valid JSON.'; }
+  lastLeft = $('left').value;
+  try { a = JSON.parse(lastLeft); } catch { return $('status').textContent = 'Left side is not valid JSON.'; }
   try { b = JSON.parse($('right').value); } catch { return $('status').textContent = 'Right side is not valid JSON.'; }
 
   const diffs = [];
